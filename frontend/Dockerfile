@@ -18,5 +18,5 @@ RUN npm install -g serve
 # Copy from the correct build output directory
 COPY --from=build /app/dist /app/build
 
-EXPOSE 5174
-CMD ["serve", "-s", "/app/build", "-l", "5174"]
+EXPOSE 5173
+CMD ["serve", "-s", "/app/build", "-l", "5173"]

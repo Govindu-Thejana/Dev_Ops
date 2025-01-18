@@ -3,15 +3,15 @@ pipeline {
     
     environment {
         DOCKER_HUB_USERNAME = 'thejana2'
-        FRONTEND_IMAGE = "thejana2/web"
-        BACKEND_IMAGE = "thejana2/api"
+        FRONTEND_IMAGE = "thejana2/client"
+        BACKEND_IMAGE = "thejana2/server"
     }
     
     stages {
         stage('SCM Checkout') {
             steps {
                 retry(3) {
-                    git branch: 'ci-cd-pipeline', url: 'https://github.com/Govindu-Thejana/Hotel-Website.git'
+                    git branch: 'master', url: 'https://github.com/Govindu-Thejana/Dev_Ops.git'
                 }
             }
         }
