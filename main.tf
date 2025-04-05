@@ -1,35 +1,107 @@
+terraform {
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 5.0" # Ensures compatibility with recent AWS provider versions
+    }
+  }
+
+  required_version = ">= 1.0.0" # Ensures Terraform version is compatible
+}
+
 provider "aws" {
-  region = "us-east-1"
+  region = "eu-north-1" # Specify the AWS region
 }
 
-resource "aws_instance" "frontend" {
-  ami           = "ami-0c02fb55956c7d316" # Amazon Linux 2 AMI
-  instance_type = "t2.micro"
-  key_name      = "your-key-pair" # Replace with your EC2 key pair name
+# Step 1: Create Security Group in Default VPC
+resource "aws_security_group" "devops_sg" {
+  name        = "My-security-group"
+  description = "Allow SSH, HTTP, HTTPS, and custom ports"
 
-  tags = {
-    Name = "Frontend"
+  ingress {
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Allow SSH from anywhere (Not secure for production)
   }
 
-  security_groups = ["default"] # Ensure SSH access is allowed
-}
-
-resource "aws_instance" "backend" {
-  ami           = "ami-0c02fb55956c7d316" # Amazon Linux 2 AMI
-  instance_type = "t2.micro"
-  key_name      = "your-key-pair" # Replace with your EC2 key pair name
-
-  tags = {
-    Name = "Backend"
+  ingress {
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Allow HTTP access from anywhere
   }
 
-  security_groups = ["default"] # Ensure SSH access is allowed
+  ingress {
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Allow HTTPS access from anywhere
+  }
+
+  # Allow Custom Ports
+  ingress {
+    from_port   = 5555
+    to_port     = 5000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Allow access to port 5000
+  }
+
+  ingress {
+    from_port   = 5173
+    to_port     = 3000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Allow access to port 3000
+  }
+
+  ingress {
+    from_port   = 27017
+    to_port     = 27017
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"] # Allow access to port 27017 (MongoDB)
+  }
+
+  egress {
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1" # Allow all outbound traffic
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "My-security-group"
+  }
 }
 
-output "frontend_ip" {
-  value = aws_instance.frontend.public_ip
+# Step 2: Create EC2 Instance with Security Group
+resource "aws_instance" "free_tier_instance" {
+  ami           = "ami-04b4f1a9cf54c11d0" # Ubuntu AMI ID
+  instance_type = "t2.micro"              # Free tier eligible instance type
+  key_name      = "devops"
+
+  # Attach Security Group by ID
+  vpc_security_group_ids = [aws_security_group.devops_sg.id]
+
+  user_data = <<-EOF
+              #!/bin/bash
+              sudo apt-get update -y
+              sudo apt-get install -y docker.io
+              sudo systemctl start docker
+              sudo systemctl enable docker
+              sudo usermod -aG docker ubuntu  # Allow the 'ubuntu' user to run Docker without sudo
+              EOF
+
+  tags = {
+    Name = "FreeTierUbuntuInstance" # Tag for the instance
+  }
 }
 
-output "backend_ip" {
-  value = aws_instance.backend.public_ip
+output "instance_id" {
+  description = "The ID of the created EC2 instance"
+  value       = aws_instance.free_tier_instance.id
+}
+
+output "instance_public_ip" {
+  description = "The public IP of the created EC2 instance"
+  value       = aws_instance.free_tier_instance.public_ip
 }
