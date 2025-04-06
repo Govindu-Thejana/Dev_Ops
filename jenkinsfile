@@ -2,16 +2,24 @@ pipeline {
     agent any
     
     environment {
+        // Docker Hub credentials
         DOCKER_HUB_USERNAME = 'thejana2'
         FRONTEND_IMAGE = "thejana2/client"
         BACKEND_IMAGE = "thejana2/server"
+        FRONTEND_PORT = 5173
+        BACKEND_PORT = 5555
+        
+        // AWS credentials
+        AWS_REGION = 'eu-north-1'
+        AWS_CREDENTIALS_ID = 'aws-credentials-id'
+        DOCKER_NETWORK = 'my-app-network'
     }
     
     stages {
         stage('SCM Checkout') {
             steps {
                 retry(3) {
-                    git branch: 'master', url: 'https://github.com/Govindu-Thejana/Dev_Ops.git'
+                    git branch: 'main', url: 'https://github.com/yasirukularathne/devops-project-code.git'
                 }
             }
         }
@@ -40,32 +48,133 @@ pipeline {
             steps {
                 withCredentials([string(credentialsId: 'test-pass', variable: 'test')]) {
                     script {
-                        bat "docker login -u thejana2 -p %test%"
+                        bat "docker login -u ${DOCKER_HUB_USERNAME} -p %test%"
                     }
                 }
             }
         }
         
-        stage('Push Frontend Image to Docker Hub') {
+        stage('Push Images to Docker Hub') {
             steps {
                 script {
                     bat "docker push ${FRONTEND_IMAGE}:${BUILD_NUMBER}"
-                }
-            }
-        }
-        
-        stage('Push Backend Image to Docker Hub') {
-            steps {
-                script {
                     bat "docker push ${BACKEND_IMAGE}:${BUILD_NUMBER}"
                 }
             }
         }
+        
+        stage('Setup AWS Credentials') {
+            steps {
+                withAWS(credentials: "${AWS_CREDENTIALS_ID}", region: "${AWS_REGION}") {
+                    echo "AWS credentials configured!"
+                }
+            }
+        }
+        
+        stage('Terraform Init') {
+            steps {
+                script {
+                    sh 'terraform init'
+                }
+            }
+        }
+        
+        stage('Terraform Plan') {
+            steps {
+                withAWS(credentials: "${AWS_CREDENTIALS_ID}", region: "${AWS_REGION}") {
+                    script {
+                        sh 'terraform plan'
+                    }
+                }
+            }
+        }
+        
+        stage('Terraform Validate') {
+            steps {
+                script {
+                    sh 'terraform validate'
+                }
+            }
+        }
+        
+        stage('Terraform Apply') {
+            steps {
+                withAWS(credentials: "${AWS_CREDENTIALS_ID}", region: "${AWS_REGION}") {
+                    script {
+                        sh 'terraform apply -auto-approve'
+                    }
+                }
+            }
+        }
+        
+        stage('Fetch EC2 Public IP') {
+            steps {
+                script {
+                    def ip = sh(script: "terraform output -raw instance_public_ip", returnStdout: true).trim()
+                    echo "EC2 Instance IP: ${ip}"
+                    env.EC2_IP = ip
+                }
+            }
+        }
+        
+        stage('Deploy Docker Containers') {
+            steps {
+                script {
+                    def DOCKER_NETWORK = env.DOCKER_NETWORK
+                    def FRONTEND_IMAGE = "${env.FRONTEND_IMAGE}:${BUILD_NUMBER}"
+                    def BACKEND_IMAGE = "${env.BACKEND_IMAGE}:${BUILD_NUMBER}"
+                    def EC2_IP = env.EC2_IP
+                    
+                    sshagent(['EC2_SSH_KEY']) {
+                        sh """
+                            ssh -o StrictHostKeyChecking=no ubuntu@${EC2_IP} '
+                                # Create Docker network if not exists
+                                if ! sudo docker network ls | grep -q ${DOCKER_NETWORK}
+                                then
+                                    echo "Creating Docker network ${DOCKER_NETWORK}..."
+                                    sudo docker network create ${DOCKER_NETWORK}
+                                else
+                                    echo "Docker network ${DOCKER_NETWORK} already exists."
+                                fi
+        
+                                # Stop and remove existing containers if running
+                                for container in frontend backend mongo
+                                do
+                                    if sudo docker ps -a | grep -q \$container
+                                    then
+                                        echo "Stopping and removing existing \$container container..."
+                                        sudo docker stop \$container || true
+                                        sudo docker rm \$container || true
+                                    fi
+                                done
+        
+                                # Pull the latest images
+                                echo "Pulling latest images..."
+                                sudo docker pull ${FRONTEND_IMAGE}
+                                sudo docker pull ${BACKEND_IMAGE}
+                                
+                                # Run containers
+                                sudo docker run -d -p 27017:27017 --name mongo --network ${DOCKER_NETWORK} mongo:latest
+                                sudo docker run -d -p 8000:8000 --name backend --network ${DOCKER_NETWORK} -e mongoDBURL=mongodb://mongo:27017/devops-db ${BACKEND_IMAGE}
+                                sudo docker run -d -p 5173:5173 --name frontend --network ${DOCKER_NETWORK} -e VITE_API_BASE_URL=http://${EC2_IP}:8000 ${FRONTEND_IMAGE}
+                            '
+                        """
+                    }
+                }
+            }
+        }
     }
-
+    
     post {
         always {
             bat "docker logout"
+            echo "Pipeline execution finished."
+        }
+        success {
+            echo "Pipeline executed successfully!"
+        }
+        failure {
+            echo "Pipeline failed. Please check the logs."
         }
     }
 }
